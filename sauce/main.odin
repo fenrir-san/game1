@@ -66,6 +66,8 @@ init_callback :: proc "c" () {
 	init_images()
 	init_fonts()
 
+  gs = &app_state.game_state
+
 	// make the vertex buffer
 	app_state.bind.vertex_buffers[0] = sg.make_buffer(
 		{usage = .DYNAMIC, size = size_of(Quad) * len(draw_frame.quads)},
@@ -128,7 +130,7 @@ init_callback :: proc "c" () {
 }
 
 //
-// :frame
+// :FRAME
 
 // global since need to keep these alive till the app ends.
 last_time: t.Time
@@ -137,7 +139,7 @@ accumulator: f64
 // todo: Cap to display device frame rate)
 // If not capped to max device frame rate,
 // sad shit happens
-sims_per_second :: 1.0 / 60.0
+seconds_per_sim :: 1.0 / 60.0
 last_sim_time: f64 = 0.0
 
 frame_callback :: proc "c" () {
@@ -145,8 +147,7 @@ frame_callback :: proc "c" () {
 	context = runtime.default_context()
 
   draw_frame = {}// mem.set(&draw_frame, 0, size_of(draw_frame))
-  draw_test()
-	reset_input(&app_state.input_state)
+  update_and_render()
 
 	app_state.bind.images[shade.IMG_tex0] = atlas.sg_image
 	app_state.bind.images[shade.IMG_tex1] = images[font.img_id].sg_img
@@ -161,6 +162,8 @@ frame_callback :: proc "c" () {
 	sg.draw(0, 6 * draw_frame.quad_count, 1)
 	sg.end_pass()
 	sg.commit()
+
+	reset_input(&app_state.input_state)
 }
 
 cleanup_callback :: proc "c" () {
@@ -169,7 +172,7 @@ cleanup_callback :: proc "c" () {
 }
 
 //
-// :utils
+// :UTILS
 
 DEFAULT_UV :: v4{0, 0, 1, 1}
 Vector2i :: [2]int
@@ -248,7 +251,7 @@ sine_breathe :: proc(p: $T) -> T where intrinsics.type_is_float(T) {
 	return (math.sin((p - .25) * 2.0 * math.PI) / 2.0) + 0.5
 }
 
-// :input
+// :INPUT
 //
 
 // number of keycodes we want in the game 
@@ -327,7 +330,7 @@ mouse_event :: proc(input_state: Input_State, keycode: Mouse_Code, key_state: Ke
 }
 
 //
-// :render stuff
+// :RENDER
 //
 // API ordered highest -> lowest level
 
@@ -494,12 +497,13 @@ draw_quad_projected :: proc(
 }
 
 //
-// :image
+// :IMAGE
 //
 Image_Id :: enum {
 	nil,
 	player,
-	crawler,
+  dirt_tile,
+  background_0
 }
 
 Image :: struct {
@@ -554,7 +558,7 @@ init_images :: proc() {
 }
 
 
-// :atlas
+// :ATLAS
 //
 Atlas :: struct {
 	w, h:     int,
@@ -563,13 +567,14 @@ Atlas :: struct {
 atlas: Atlas
 // We're hardcoded to use just 1 atlas now since I don't think we'll need more
 // It would be easy enough to extend though. Just add in more texture slots in the shader
+// :pack
 pack_images_into_atlas :: proc() {
 
 	// TODO - add a single pixel of padding for each so we avoid the edge oversampling issue
 
 	// 8192 x 8192 is the WGPU recommended max I think
-	atlas.w = 128
-	atlas.h = 128
+	atlas.w = 512
+	atlas.h = 512
 
 	cont: stbrp.Context
 	nodes: [128]stbrp.Node // #volatile with atlas.w
@@ -648,7 +653,7 @@ pack_images_into_atlas :: proc() {
 }
 
 //
-// :font
+// :FONT
 //
 draw_text :: proc(pos: Vector2, text: string, scale := 1.0) {
 	using stbtt
@@ -698,6 +703,9 @@ draw_text :: proc(pos: Vector2, text: string, scale := 1.0) {
 
 }
 
+//
+// :FONT
+//
 font_bitmap_w :: 256
 font_bitmap_h :: 256
 char_count :: 96
@@ -774,31 +782,171 @@ store_image :: proc(w: int, h: int, tex_index: u8, sg_img: sg.Image) -> Image_Id
 }
 
 //
+// :entity
+//
+
+Entity_ID :: u64
+
+Entity_Type :: enum {
+	nil,
+	player,
+}
+
+Entity_Flags :: enum {
+	allocated,
+	physics,
+}
+
+Entity :: struct {
+	id:      Entity_ID,
+	type:    Entity_Type,
+	pos:     Vector2,
+	vel:     Vector2,
+	acc:     Vector2,
+	user_id: UserID,
+	flags:   bit_set[Entity_Flags],
+	frame:   struct {
+		input_axis: Vector2,
+	},
+}
+
+// Returns the Entity with Entity_ID == id
+// @param id: Entity_ID
+// @return ^Entity
+id_to_entity :: proc(id: Entity_ID) -> ^Entity {
+	for &en in gs.entities {
+		if (en.id == id) {return &en}
+	}
+	log_error("entity does not exist")
+	return nil
+}
+
+// Returns the Entity_ID
+// @param entity: Entity
+// @return Entity_ID
+entity_to_id :: proc(entity: Entity) -> Entity_ID {
+	return entity.id
+}
+
+entity_create :: proc() -> ^Entity {
+	spare_en: ^Entity
+	for &en in gs.entities {
+		if !(.allocated in en.flags) {
+			spare_en = &en
+			break
+		}
+	}
+	if spare_en == nil {
+		log_error("ran out of titties")
+		return nil
+	} else {
+		spare_en.flags = {.allocated}
+		gs.latest_entity_id += 1
+		spare_en.id = gs.latest_entity_id
+		return spare_en
+	}
+}
+
+entity_destroy :: proc(entity: ^Entity) {
+	mem.set(entity, 0, size_of(entity))
+}
+
+setup_player :: proc(e: ^Entity) {
+	e.type = .player
+	e.flags |= {.physics}
+}
+
+//
 // :game state
 // 
 Game_State :: struct {
+  ticks: u64,
+  entities: [128]Entity,
+  latest_entity_id: Entity_ID,
+  player_id: Entity_ID
+}
+gs : ^Game_State
+game_res_w :: 480
+game_res_h :: 270
 
+// Returns the player entity
+// @return ^Entity
+get_player :: proc() -> ^Entity {
+  return id_to_entity(gs.player_id)
+}
+
+get_delta_time :: proc() -> f64 {
+  return sapp.frame_duration()
 }
 
 //
-// :draw
+// :update and render
 //
+update_and_render :: proc() {
+  defer gs.ticks += 1
+  using linalg
 
-draw_test :: proc() {
-	using linalg
+  dt := get_delta_time()
 
+  if key_event(app_state.input_state, .F11, .pressed) {
+    sapp.toggle_fullscreen()
+  }
+
+  if gs.ticks == 0 {
+    en := entity_create()
+    setup_player(en)
+    gs.player_id = entity_to_id(en^)
+  }
+
+  player := get_player()
+  for &en in gs.entities {
+    en.frame = {}
+  }
+
+  if key_event(app_state.input_state, .A, .down) {
+    player.frame.input_axis.x += -1
+  }
+  if key_event(app_state.input_state, .D, .down) {
+    player.frame.input_axis.x += 1
+  }
+  if key_event(app_state.input_state, .W, .down) {
+    player.frame.input_axis.y += 1
+  }
+  if key_event(app_state.input_state, .S, .down) {
+    player.frame.input_axis.y += -1
+  }
+  if length(player.frame.input_axis) != 0 {
+  player.frame.input_axis = normalize(player.frame.input_axis)
+  }
+  player.pos += player.frame.input_axis * (100.0) * f32(dt)
+
+
+  // :render
 	draw_frame.projection = matrix_ortho3d_f32(window_w * -0.5, window_w * 0.5, window_h * -0.5, window_h * 0.5, -1, 1)
 	
 	draw_frame.camera_xform = Matrix4(1)
-	draw_frame.camera_xform *= xform_scale(2)
+	draw_frame.camera_xform *= xform_scale(f32(window_h) / f32(game_res_h))
+
+  draw_rect_aabb(Vector2{game_res_w * -0.5, game_res_h * -0.5}, Vector2{game_res_w, game_res_h}, img_id=.background_0)
+	draw_text(v2{-200, 100}, "sugon", scale=1.0)
 	
-	alpha :f32= auto_cast math.mod(seconds_since_init() * 0.2, 1.0)
-	xform := xform_rotate(alpha * 360.0)
-	xform *= xform_scale(1.0 + 1 * sine_breathe(alpha))
-	draw_sprite(v2{}, .player, pivot=.bottom_center)
+  for en in gs.entities {
+    if .allocated in en.flags {
+      #partial switch en.type {
+      case .player:
+        draw_player(en)
+      }
+    }
+  }
+
+	// alpha :f32= auto_cast math.mod(seconds_since_init() * 0.2, 1.0)
+	// xform := xform_rotate(alpha * 360.0)
+	// xform *= xform_scale(1.0 + 1 * sine_breathe(alpha))
+	// draw_sprite(v2{}, .player, pivot=.bottom_center)
+	// draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
 	
-	draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
-	
-	draw_text(v2{50, 0}, "sugon", scale=4.0)
 }
 
+draw_player :: proc(en: Entity) {
+  draw_sprite(en.pos, .player, pivot=.bottom_center)
+}
