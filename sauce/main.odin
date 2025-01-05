@@ -30,8 +30,8 @@ app_state: struct {
 
 UserID :: u64
 
-window_w :: 1280
-window_h :: 720
+WINDOW_W :: 1280
+WINDOW_H :: 720
 
 main :: proc() {
 	sapp.run(
@@ -40,8 +40,8 @@ main :: proc() {
 			frame_cb = frame_callback, // update and render
 			cleanup_cb = cleanup_callback, // end
 			event_cb = event_callback, // event handler
-			width = window_w,
-			height = window_h,
+			width = WINDOW_W,
+			height = WINDOW_H,
 			window_title = "This hot sauce is mine now eheheheheh!!",
 			icon = {sokol_default = true},
 			logger = {func = slog.func},
@@ -785,7 +785,13 @@ store_image :: proc(w: int, h: int, tex_index: u8, sg_img: sg.Image) -> Image_Id
 // :entity
 //
 
+
 Entity_ID :: u64
+
+Entity_Handle :: struct {
+  id: Entity_ID,
+  index: int,
+}
 
 Entity_Type :: enum {
 	nil,
@@ -798,7 +804,7 @@ Entity_Flags :: enum {
 }
 
 Entity :: struct {
-	id:      Entity_ID,
+	handle:      Entity_Handle,
 	type:    Entity_Type,
 	pos:     Vector2,
 	vel:     Vector2,
@@ -811,28 +817,40 @@ Entity :: struct {
 }
 
 // Returns the Entity with Entity_ID == id
-// @param id: Entity_ID
-// @return ^Entity
-id_to_entity :: proc(id: Entity_ID) -> ^Entity {
-	for &en in gs.entities {
-		if (en.id == id) {return &en}
-	}
+handle_to_entity:: proc(handle: Entity_Handle) -> ^Entity {
+  en := &gs.entities[handle.index]
+  if en.handle.id == handle.id {
+    return en
+  }
 	log_error("entity does not exist")
 	return nil
 }
 
+id_to_entity:: proc(id: Entity_ID) -> ^Entity {
+  for &en in gs.entities {
+    if en.handle.id == id {
+      return &en
+    }
+  }
+  return nil
+}
+
 // Returns the Entity_ID
-// @param entity: Entity
-// @return Entity_ID
-entity_to_id :: proc(entity: Entity) -> Entity_ID {
-	return entity.id
+entity_to_id :: proc(entity: Entity) -> Entity_ID{
+	return entity.handle.id
+}
+
+entity_to_handle :: proc(entity: Entity) -> Entity_Handle{
+	return entity.handle
 }
 
 entity_create :: proc() -> ^Entity {
 	spare_en: ^Entity
-	for &en in gs.entities {
+  index := -1
+	for &en, i in gs.entities {
 		if !(.allocated in en.flags) {
 			spare_en = &en
+      index = i
 			break
 		}
 	}
@@ -842,7 +860,8 @@ entity_create :: proc() -> ^Entity {
 	} else {
 		spare_en.flags = {.allocated}
 		gs.latest_entity_id += 1
-		spare_en.id = gs.latest_entity_id
+		spare_en.handle.id = gs.latest_entity_id
+		spare_en.handle.index = index
 		return spare_en
 	}
 }
@@ -857,20 +876,68 @@ setup_player :: proc(e: ^Entity) {
 }
 
 //
+// :tiles
+//
+
+MAP_W_TILE :: 25
+MAP_H_TILE :: 14
+TILE_SIZE :: 16 // 16x16
+
+Tile_Coords :: Vector2i
+World_Pos :: Vector2
+Local_Pos :: Vector2
+
+Tile_Type :: enum {
+  empty,
+  dirt,
+  tilled,
+}
+
+Tile :: struct {
+  type: Tile_Type
+}
+
+local_coords_to_world_coords :: proc(pos: Tile_Coords) -> Tile_Coords{
+  x_index := pos.x - int(math.floor(f32(MAP_W_TILE * 0.5)))
+  y_index := pos.y - int(math.floor(f32(MAP_H_TILE * 0.5)))
+  return Tile_Coords{x_index, y_index}
+}
+
+world_coords_to_local_coords :: proc(pos: Tile_Coords) -> Tile_Coords{
+  x_index := pos.x + int(math.floor(f32(MAP_W_TILE * 0.5)))
+  y_index := pos.y + int(math.floor(f32(MAP_H_TILE * 0.5)))
+  return Tile_Coords{x_index, y_index}
+}
+
+tile_pos_to_world_pos :: proc(tile_pos: Tile_Coords) -> World_Pos {
+  return World_Pos{
+    f32(tile_pos.x * TILE_SIZE) - TILE_SIZE * MAP_W_TILE * 0.5, 
+    f32(tile_pos.y * TILE_SIZE) - TILE_SIZE * MAP_H_TILE * 0.5
+  }
+}
+
+world_pos_to_tile_pos :: proc(world_pos: World_Pos) -> Tile_Coords {
+  return Tile_Coords{int(math.floor(world_pos.x/TILE_SIZE)), int(math.floor(world_pos.y/TILE_SIZE))}
+}
+
+//
 // :game state
 // 
+
 Game_State :: struct {
   ticks: u64,
   entities: [128]Entity,
   latest_entity_id: Entity_ID,
-  player_id: Entity_ID
+  player_id: Entity_ID,
+  
+  tiles: [MAP_W_TILE * MAP_H_TILE]Tile
 }
 gs : ^Game_State
-game_res_w :: 480
-game_res_h :: 270
+
+GAME_RES_W :: 480
+GAME_RES_H :: 270
 
 // Returns the player entity
-// @return ^Entity
 get_player :: proc() -> ^Entity {
   return id_to_entity(gs.player_id)
 }
@@ -892,10 +959,19 @@ update_and_render :: proc() {
     sapp.toggle_fullscreen()
   }
 
+  // :world setup
   if gs.ticks == 0 {
     en := entity_create()
     setup_player(en)
     gs.player_id = entity_to_id(en^)
+  }
+
+  for x in 0..<MAP_W_TILE {
+    for y in 0..<MAP_H_TILE {
+      if x %2 == y %2 {
+        gs.tiles[y*MAP_W_TILE + x].type = .dirt
+      }
+    }
   }
 
   player := get_player()
@@ -922,14 +998,30 @@ update_and_render :: proc() {
 
 
   // :render
-	draw_frame.projection = matrix_ortho3d_f32(window_w * -0.5, window_w * 0.5, window_h * -0.5, window_h * 0.5, -1, 1)
+	draw_frame.projection = matrix_ortho3d_f32(WINDOW_W * -0.5, WINDOW_W * 0.5, WINDOW_H * -0.5, WINDOW_H * 0.5, -1, 1)
 	
 	draw_frame.camera_xform = Matrix4(1)
-	draw_frame.camera_xform *= xform_scale(f32(window_h) / f32(game_res_h))
+	draw_frame.camera_xform *= xform_scale(f32(WINDOW_W) / f32(GAME_RES_W))
 
-  draw_rect_aabb(Vector2{game_res_w * -0.5, game_res_h * -0.5}, Vector2{game_res_w, game_res_h}, img_id=.background_0)
-	draw_text(v2{-200, 100}, "sugon", scale=1.0)
-	
+  draw_rect_aabb(Vector2{GAME_RES_W * -0.5, GAME_RES_H * -0.5}, Vector2{GAME_RES_W, GAME_RES_H}, img_id=.background_0)
+
+
+  // render tiles
+  for x in 0..<MAP_W_TILE {
+    for y in 0..<MAP_H_TILE {
+      index:= y * MAP_W_TILE + x
+      tile:=gs.tiles[index]
+      if tile.type == .dirt{
+        draw_rect_aabb(
+          tile_pos_to_world_pos(Tile_Coords{x,y}),
+          Vector2{TILE_SIZE, TILE_SIZE},
+          img_id=.dirt_tile,
+          )
+      }
+    }
+  }
+
+  // render player
   for en in gs.entities {
     if .allocated in en.flags {
       #partial switch en.type {
@@ -944,6 +1036,8 @@ update_and_render :: proc() {
 	// xform *= xform_scale(1.0 + 1 * sine_breathe(alpha))
 	// draw_sprite(v2{}, .player, pivot=.bottom_center)
 	// draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
+	draw_text(v2{-200, 100}, "sugon", scale=1.0)
+	
 	
 }
 

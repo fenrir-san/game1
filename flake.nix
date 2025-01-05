@@ -16,7 +16,6 @@
       packages = with pkgs; [
       sokol
       odin
-      ols
       alsa-lib
       mesa
       libglvnd
@@ -28,12 +27,9 @@
       xorg.xrandr
       xorg.xdpyinfo
       ];
-      shellHook = ''zsh; 
-      export QT_FONT_DPI=96
-      export GDK_SCALE=1
-      export GDK_DPI_SCALE=1
-      export SDL_VIDEODRIVER=wayland
-      export WAYLAND_DISPLAY=wayland-1
+      shellHook = ''
+      export PATH="/home/fenrir/Documents/language_servers/ols:$PATH";
+      zsh; 
       exit;'';
     };
   };
