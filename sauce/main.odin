@@ -24,7 +24,7 @@ app_state: struct {
 	pass_action:   sg.Pass_Action,
 	pip:           sg.Pipeline,
 	bind:          sg.Bindings,
-  game_state: Game_State,
+  game_state:    Game_State,
 	input_state:   Input_State,
 }
 
@@ -67,6 +67,7 @@ init_callback :: proc "c" () {
 	init_fonts()
 
   gs = &app_state.game_state
+  init_map()
 
 	// make the vertex buffer
 	app_state.bind.vertex_buffers[0] = sg.make_buffer(
@@ -185,6 +186,8 @@ v4 :: Vector4
 Matrix4 :: linalg.Matrix4f32
 
 COLOR_WHITE :: Vector4{1, 1, 1, 1}
+COLOR_GREEN :: Vector4{0, 1, 0, 1}
+COLOR_BLUE :: Vector4{0, 0, 1, 1}
 COLOR_RED :: Vector4{1, 0, 0, 1}
 
 // might do something with these later on
@@ -279,6 +282,7 @@ Mouse_Code :: enum {
 Input_State :: struct {
 	keys:          [MAX_KEYCODES]bit_set[Key_State],
 	mouse_buttons: [MAX_MOUSE_BUTTONS]bit_set[Key_State],
+  mouse_pos: Vector2
 }
 
 reset_input :: proc(input_state: ^Input_State) {
@@ -306,6 +310,10 @@ map_mouse_keys :: proc "c" (button: sapp.Mousebutton) -> Mouse_Code {
 
 event_callback :: proc "c" (event: ^sapp.Event) {
 	input_state := &app_state.input_state
+
+  input_state.mouse_pos.x = event.mouse_x
+  input_state.mouse_pos.y = event.mouse_y
+
 	#partial switch event.type {
 	case .KEY_DOWN:
 		input_state.keys[event.key_code] += {.down, .pressed}
@@ -321,12 +329,12 @@ event_callback :: proc "c" (event: ^sapp.Event) {
 	}
 }
 
-key_event :: proc(input_state: Input_State, keycode: sapp.Keycode, key_state: Key_State) -> bool {
-	return key_state in input_state.keys[keycode]
+key_event :: proc(keycode: sapp.Keycode, key_state: Key_State) -> bool {
+	return key_state in app_state.input_state.keys[keycode]
 }
 
-mouse_event :: proc(input_state: Input_State, keycode: Mouse_Code, key_state: Key_State) -> bool {
-	return key_state in input_state.mouse_buttons[keycode]
+mouse_event :: proc(keycode: Mouse_Code, key_state: Key_State) -> bool {
+	return key_state in app_state.input_state.mouse_buttons[keycode]
 }
 
 //
@@ -502,7 +510,7 @@ draw_quad_projected :: proc(
 Image_Id :: enum {
 	nil,
 	player,
-  dirt_tile,
+  dirt,
   background_0
 }
 
@@ -513,6 +521,7 @@ Image :: struct {
 	data:          [^]byte,
 	atlas_uvs:     Vector4,
 }
+
 images: [128]Image
 image_count: int
 
@@ -883,9 +892,12 @@ MAP_W_TILE :: 25
 MAP_H_TILE :: 14
 TILE_SIZE :: 16 // 16x16
 
-Tile_Coords :: Vector2i
-World_Pos :: Vector2
-Local_Pos :: Vector2
+World_Coords :: Vector2
+// Map = Tiled World
+// World = Expanded Map
+
+Tile_Coords_Map :: Vector2i
+Tile_Coords_World :: World_Coords
 
 Tile_Type :: enum {
   empty,
@@ -897,27 +909,52 @@ Tile :: struct {
   type: Tile_Type
 }
 
-local_coords_to_world_coords :: proc(pos: Tile_Coords) -> Tile_Coords{
-  x_index := pos.x - int(math.floor(f32(MAP_W_TILE * 0.5)))
-  y_index := pos.y - int(math.floor(f32(MAP_H_TILE * 0.5)))
-  return Tile_Coords{x_index, y_index}
-}
-
-world_coords_to_local_coords :: proc(pos: Tile_Coords) -> Tile_Coords{
-  x_index := pos.x + int(math.floor(f32(MAP_W_TILE * 0.5)))
-  y_index := pos.y + int(math.floor(f32(MAP_H_TILE * 0.5)))
-  return Tile_Coords{x_index, y_index}
-}
-
-tile_pos_to_world_pos :: proc(tile_pos: Tile_Coords) -> World_Pos {
-  return World_Pos{
-    f32(tile_pos.x * TILE_SIZE) - TILE_SIZE * MAP_W_TILE * 0.5, 
-    f32(tile_pos.y * TILE_SIZE) - TILE_SIZE * MAP_H_TILE * 0.5
+init_map :: proc() {
+  for x in 0..<MAP_W_TILE {
+    for y in 0..<MAP_H_TILE {
+      gs.tiles[y + x * MAP_H_TILE].type = .dirt
+    }
   }
 }
 
-world_pos_to_tile_pos :: proc(world_pos: World_Pos) -> Tile_Coords {
-  return Tile_Coords{int(math.floor(world_pos.x/TILE_SIZE)), int(math.floor(world_pos.y/TILE_SIZE))}
+map_coords_to_world_coords :: proc(tile_pos: Tile_Coords_Map) -> Tile_Coords_World {
+  return Tile_Coords_World{
+    f32(tile_pos.x * TILE_SIZE) - f32(MAP_W_TILE * TILE_SIZE) * 0.5,
+    f32(tile_pos.y * TILE_SIZE) - f32(MAP_H_TILE * TILE_SIZE) * 0.5,
+  }
+}
+
+world_coords_to_map_coords :: proc(world_pos: Tile_Coords_World) -> Tile_Coords_Map {
+  return Tile_Coords_Map{
+    int(math.floor(world_pos.x/f32(TILE_SIZE) + f32(MAP_W_TILE) * 0.5)), 
+    int(math.floor(world_pos.y/f32(TILE_SIZE) + f32(MAP_H_TILE) * 0.5))
+  }
+}
+
+get_tile_at_map_coords :: proc(map_pos: Tile_Coords_Map) -> ^Tile {
+  index := map_pos.y + map_pos.x * MAP_H_TILE
+  if index < 0 || index >= MAP_W_TILE * MAP_H_TILE {
+    return nil
+  }
+  return &gs.tiles[index]
+}
+
+mouse_pos_in_world_coords :: proc() -> World_Coords {
+  if draw_frame.projection == {} {
+    log_error("no projection set yet")
+  }
+  mouse_pos := app_state.input_state.mouse_pos 
+
+  ndc_x := (mouse_pos.x / (f32(WINDOW_W) * 0.5)) - 1.0
+  ndc_y := (mouse_pos.y / (f32(WINDOW_H) * 0.5)) - 1.0
+  ndc_y *= -1
+
+  mouse_ndc := Vector2{ndc_x, ndc_y}
+  mouse_world := Vector4{mouse_ndc.x, mouse_ndc.y, 0, 1}
+  mouse_world *= linalg.inverse(draw_frame.projection)
+  mouse_world *= linalg.inverse(draw_frame.camera_xform)
+
+  return mouse_world.xy
 }
 
 //
@@ -955,7 +992,7 @@ update_and_render :: proc() {
 
   dt := get_delta_time()
 
-  if key_event(app_state.input_state, .F11, .pressed) {
+  if key_event(.F11, .pressed) {
     sapp.toggle_fullscreen()
   }
 
@@ -966,29 +1003,21 @@ update_and_render :: proc() {
     gs.player_id = entity_to_id(en^)
   }
 
-  for x in 0..<MAP_W_TILE {
-    for y in 0..<MAP_H_TILE {
-      if x %2 == y %2 {
-        gs.tiles[y*MAP_W_TILE + x].type = .dirt
-      }
-    }
-  }
-
   player := get_player()
   for &en in gs.entities {
     en.frame = {}
   }
 
-  if key_event(app_state.input_state, .A, .down) {
+  if key_event(.A, .down) {
     player.frame.input_axis.x += -1
   }
-  if key_event(app_state.input_state, .D, .down) {
+  if key_event(.D, .down) {
     player.frame.input_axis.x += 1
   }
-  if key_event(app_state.input_state, .W, .down) {
+  if key_event(.W, .down) {
     player.frame.input_axis.y += 1
   }
-  if key_event(app_state.input_state, .S, .down) {
+  if key_event(.S, .down) {
     player.frame.input_axis.y += -1
   }
   if length(player.frame.input_axis) != 0 {
@@ -1005,18 +1034,40 @@ update_and_render :: proc() {
 
   draw_rect_aabb(Vector2{GAME_RES_W * -0.5, GAME_RES_H * -0.5}, Vector2{GAME_RES_W, GAME_RES_H}, img_id=.background_0)
 
+  // ground -> tilled
+  mouse_world := mouse_pos_in_world_coords()
+  mouse_pos := world_coords_to_map_coords(mouse_world)
+  mouse_tile := get_tile_at_map_coords(mouse_pos)
+  loggie(mouse_world, mouse_pos, mouse_tile)
+  if mouse_event(.MOUSE_LEFT, .pressed) {
+    if mouse_tile != nil {
+      mouse_tile.type = .tilled
+    }
+  }
 
   // render tiles
   for x in 0..<MAP_W_TILE {
     for y in 0..<MAP_H_TILE {
-      index:= y * MAP_W_TILE + x
+      index:= y + x * MAP_H_TILE
       tile:=gs.tiles[index]
-      if tile.type == .dirt{
+      pos := map_coords_to_world_coords(Tile_Coords_Map{x,y})
+      if tile.type == .dirt {
+
+        // #debug
+        mouse_tile := world_coords_to_map_coords(mouse_pos_in_world_coords())
+
+        col := COLOR_WHITE
+        if mouse_tile == {x,y} {
+          col = COLOR_RED
+        }
+        // #debug
+
         draw_rect_aabb(
-          tile_pos_to_world_pos(Tile_Coords{x,y}),
+          pos,
           Vector2{TILE_SIZE, TILE_SIZE},
-          img_id=.dirt_tile,
-          )
+          img_id= .dirt,
+          col = col
+        )
       }
     }
   }

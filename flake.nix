@@ -19,6 +19,8 @@
       alsa-lib
       mesa
       libglvnd
+      libGL
+      libGLU
       xorg.libXcursor
       xorg.libXi
       xorg.libX11
