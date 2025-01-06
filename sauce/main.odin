@@ -912,7 +912,7 @@ Tile :: struct {
 init_map :: proc() {
   for x in 0..<MAP_W_TILE {
     for y in 0..<MAP_H_TILE {
-      gs.tiles[y + x * MAP_H_TILE].type = .dirt
+      gs.tiles[y * MAP_W_TILE + x].type = .dirt
     }
   }
 }
@@ -932,7 +932,10 @@ world_coords_to_map_coords :: proc(world_pos: Tile_Coords_World) -> Tile_Coords_
 }
 
 get_tile_at_map_coords :: proc(map_pos: Tile_Coords_Map) -> ^Tile {
-  index := map_pos.y + map_pos.x * MAP_H_TILE
+  if map_pos.y < 0 || map_pos.x < 0 {
+    return nil
+  }
+  index := map_pos.y * MAP_W_TILE + map_pos.x
   if index < 0 || index >= MAP_W_TILE * MAP_H_TILE {
     return nil
   }
@@ -1035,10 +1038,9 @@ update_and_render :: proc() {
   draw_rect_aabb(Vector2{GAME_RES_W * -0.5, GAME_RES_H * -0.5}, Vector2{GAME_RES_W, GAME_RES_H}, img_id=.background_0)
 
   // ground -> tilled
-  mouse_world := mouse_pos_in_world_coords()
-  mouse_pos := world_coords_to_map_coords(mouse_world)
+  mouse_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
   mouse_tile := get_tile_at_map_coords(mouse_pos)
-  loggie(mouse_world, mouse_pos, mouse_tile)
+  loggie(mouse_pos, mouse_tile)
   if mouse_event(.MOUSE_LEFT, .pressed) {
     if mouse_tile != nil {
       mouse_tile.type = .tilled
@@ -1048,7 +1050,7 @@ update_and_render :: proc() {
   // render tiles
   for x in 0..<MAP_W_TILE {
     for y in 0..<MAP_H_TILE {
-      index:= y + x * MAP_H_TILE
+      index:= y * MAP_W_TILE + x
       tile:=gs.tiles[index]
       pos := map_coords_to_world_coords(Tile_Coords_Map{x,y})
       if tile.type == .dirt {
