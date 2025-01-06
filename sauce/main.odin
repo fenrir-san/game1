@@ -906,7 +906,10 @@ Tile_Type :: enum {
 }
 
 Tile :: struct {
-  type: Tile_Type
+  type: Tile_Type,
+  frame: struct {
+    selected: bool
+  }
 }
 
 init_map :: proc() {
@@ -932,7 +935,7 @@ world_coords_to_map_coords :: proc(world_pos: Tile_Coords_World) -> Tile_Coords_
 }
 
 get_tile_at_map_coords :: proc(map_pos: Tile_Coords_Map) -> ^Tile {
-  if map_pos.y < 0 || map_pos.x < 0 {
+  if map_pos.y < 0 || map_pos.y >= MAP_H_TILE || map_pos.x < 0 || map_pos.x >= MAP_W_TILE {
     return nil
   }
   index := map_pos.y * MAP_W_TILE + map_pos.x
@@ -1024,9 +1027,9 @@ update_and_render :: proc() {
     player.frame.input_axis.y += -1
   }
   if length(player.frame.input_axis) != 0 {
-  player.frame.input_axis = normalize(player.frame.input_axis)
+    player.frame.input_axis = normalize(player.frame.input_axis)
   }
-  player.pos += player.frame.input_axis * (100.0) * f32(dt)
+  player.pos += player.frame.input_axis * (150.0) * f32(dt)
 
 
   // :render
@@ -1040,7 +1043,9 @@ update_and_render :: proc() {
   // ground -> tilled
   mouse_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
   mouse_tile := get_tile_at_map_coords(mouse_pos)
-  loggie(mouse_pos, mouse_tile)
+  if mouse_tile != nil {
+    mouse_tile.frame.selected = true
+  }
   if mouse_event(.MOUSE_LEFT, .pressed) {
     if mouse_tile != nil {
       mouse_tile.type = .tilled
@@ -1056,10 +1061,11 @@ update_and_render :: proc() {
       if tile.type == .dirt {
 
         // #debug
-        mouse_tile := world_coords_to_map_coords(mouse_pos_in_world_coords())
+        tile := get_tile_at_map_coords({x,y})
+        mouse_tile_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
 
         col := COLOR_WHITE
-        if mouse_tile == {x,y} {
+        if tile != nil && tile.frame.selected {
           col = COLOR_RED
         }
         // #debug
@@ -1090,8 +1096,6 @@ update_and_render :: proc() {
 	// draw_sprite(v2{}, .player, pivot=.bottom_center)
 	// draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
 	draw_text(v2{-200, 100}, "sugon", scale=1.0)
-	
-	
 }
 
 draw_player :: proc(en: Entity) {
