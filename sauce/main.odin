@@ -510,7 +510,8 @@ draw_quad_projected :: proc(
 Image_Id :: enum {
 	nil,
 	player,
-  dirt,
+  dirt_tile,
+  tilled_tile,
   background_0
 }
 
@@ -1010,8 +1011,13 @@ update_and_render :: proc() {
   }
 
   player := get_player()
+
+  // reset shit
   for &en in gs.entities {
     en.frame = {}
+  }
+  for &t in gs.tiles {
+    t.frame = {}
   }
 
   if key_event(.A, .down) {
@@ -1033,21 +1039,20 @@ update_and_render :: proc() {
 
 
   // :render
-	draw_frame.projection = matrix_ortho3d_f32(WINDOW_W * -0.5, WINDOW_W * 0.5, WINDOW_H * -0.5, WINDOW_H * 0.5, -1, 1)
-	
-	draw_frame.camera_xform = Matrix4(1)
-	draw_frame.camera_xform *= xform_scale(f32(WINDOW_W) / f32(GAME_RES_W))
+  draw_frame.projection = matrix_ortho3d_f32(WINDOW_W * -0.5, WINDOW_W * 0.5, WINDOW_H * -0.5, WINDOW_H * 0.5, -1, 1)
+
+  draw_frame.camera_xform = Matrix4(1)
+  draw_frame.camera_xform *= xform_scale(f32(WINDOW_W) / f32(GAME_RES_W))
 
   draw_rect_aabb(Vector2{GAME_RES_W * -0.5, GAME_RES_H * -0.5}, Vector2{GAME_RES_W, GAME_RES_H}, img_id=.background_0)
 
   // ground -> tilled
-  mouse_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
-  mouse_tile := get_tile_at_map_coords(mouse_pos)
+  mouse_tile_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
+  mouse_tile := get_tile_at_map_coords(mouse_tile_pos)
   if mouse_tile != nil {
+    // todo: change selectable region based on weapon/tool?
     mouse_tile.frame.selected = true
-  }
-  if mouse_event(.MOUSE_LEFT, .pressed) {
-    if mouse_tile != nil {
+    if mouse_event(.MOUSE_LEFT, .pressed) {
       mouse_tile.type = .tilled
     }
   }
@@ -1058,23 +1063,31 @@ update_and_render :: proc() {
       index:= y * MAP_W_TILE + x
       tile:=gs.tiles[index]
       pos := map_coords_to_world_coords(Tile_Coords_Map{x,y})
-      if tile.type == .dirt {
+      if tile.type != nil {
 
-        // #debug
         tile := get_tile_at_map_coords({x,y})
         mouse_tile_pos := world_coords_to_map_coords(mouse_pos_in_world_coords())
 
+        img_id: Image_Id
+
+        #partial switch tile.type {
+        case .dirt: img_id = .dirt_tile
+        case .tilled: img_id = .tilled_tile
+        }
+
+        /*
         col := COLOR_WHITE
-        if tile != nil && tile.frame.selected {
+        if tile != nil && mouse_tile_pos == {x,y} {
           col = COLOR_RED
         }
+        */
         // #debug
 
         draw_rect_aabb(
           pos,
           Vector2{TILE_SIZE, TILE_SIZE},
-          img_id= .dirt,
-          col = col
+          img_id= img_id,
+          //col = col
         )
       }
     }
@@ -1090,12 +1103,12 @@ update_and_render :: proc() {
     }
   }
 
-	// alpha :f32= auto_cast math.mod(seconds_since_init() * 0.2, 1.0)
-	// xform := xform_rotate(alpha * 360.0)
-	// xform *= xform_scale(1.0 + 1 * sine_breathe(alpha))
-	// draw_sprite(v2{}, .player, pivot=.bottom_center)
-	// draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
-	draw_text(v2{-200, 100}, "sugon", scale=1.0)
+  // alpha :f32= auto_cast math.mod(seconds_since_init() * 0.2, 1.0)
+  // xform := xform_rotate(alpha * 360.0)
+  // xform *= xform_scale(1.0 + 1 * sine_breathe(alpha))
+  // draw_sprite(v2{}, .player, pivot=.bottom_center)
+  // draw_sprite(v2{-50, 50}, .crawler, xform=xform, pivot=.center_center)
+  draw_text(v2{-200, 100}, "sugon", scale=1.0)
 }
 
 draw_player :: proc(en: Entity) {
